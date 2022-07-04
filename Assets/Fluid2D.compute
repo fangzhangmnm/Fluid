@@ -1,0 +1,38 @@
+﻿#pragma kernel JacobiIterationFloat TYPE=float JacobiIteration=JacobiIterationFloat
+#pragma kernel JacobiIterationFloat2 TYPE=float2 JacobiIteration=JacobiIterationFloat2
+
+Texture2D<TYPE> jac_x,jac_b;
+RWTexture2D<TYPE> jac_x_new;
+float jac_alpha,jac_inv_beta;
+
+[numthreads(8,8,1)]
+void JacobiIteration(uint3 id : SV_DispatchThreadID){
+    TYPE b_c=jac_b[id.xy];
+    TYPE x_xp=jac_x[id.xy+int2(1,0)];
+    TYPE x_xm=jac_x[id.xy+int2(-1,0)];
+    TYPE x_yp=jac_x[id.xy+int2(0,1)];
+    TYPE x_ym=jac_x[id.xy+int2(0,-1)];
+    jac_x_new[id.xy]=(x_xp+x_xm+x_yp+x_ym+jac_alpha*b_c)*jac_inv_beta;
+}
+
+#pragma kernel AdvenctionFloat2 TYPE=float2 Advenction=AdvenctionFloat2
+
+Texture2D<float2> adv_udt;
+Texture2D<TYPE> adv_q;
+RWTexture2D<TYPE> adv_q_new;
+float2 gridSize;
+int2 gridCount;
+SamplerState linear_clamp_sampler;
+
+[numthreads(8,8,1)]
+void Advenction(uint3 id : SV_DispatchThreadID){
+    float2 uv=(id.xy+float2(.5,.5))/gridCount;
+    float2 bias=adv_udt[id.xy]/gridSize;
+    adv_q_new[id.xy]=adv_q.SampleLevel(linear_clamp_sampler,uv+bias,0);
+}
+
+
+
+
+//Fluid is incompressible, since we do not capture sound waves or shockwaves.
+// Create a RenderTexture with enableRandomWrite flag and set it with cs.SetTexture
