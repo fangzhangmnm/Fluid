@@ -34,6 +34,7 @@ Shader "Unlit/FluidVisualize2D"
 
             sampler2D _MainTex;
             float4 _MainTex_ST;
+            float color_scale;
 
             v2f vert (appdata v)
             {
@@ -48,7 +49,7 @@ Shader "Unlit/FluidVisualize2D"
             {
                 // sample the texture
                 fixed4 col = tex2D(_MainTex, i.uv);
-                col=abs(col)/2;
+                col=abs(col)/color_scale;
                 // apply fog
                 UNITY_APPLY_FOG(i.fogCoord, col);
                 return col;

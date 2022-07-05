@@ -9,20 +9,22 @@ bool IsOnBoundary(uint3 id){
          ||((id.y==0 || id.y==gridCount.y-1) && 0<=id.x && id.x<gridCount.x);
 }
 bool IsInBulk(uint3 id){
-    return (
-        0<id.x && id.x<gridCount.x-1 &&
-        0<id.y && id.y<gridCount.y-1
-    );
+    return (0<id.x && id.x<gridCount.x-1 &&
+            0<id.y && id.y<gridCount.y-1);
+}
+bool IsInBulkBoundary(uint3 id){
+    return (0<=id.x && id.x<gridCount.x &&
+            0<=id.y && id.y<gridCount.y);
 }
 
 
 Texture2D<TYPE> input_x,input_b;
 RWTexture2D<TYPE> output_x;
+
 Texture2D<float> input_scalar;
 Texture2D<float2> input_vector;
 
 
-SamplerState linear_clamp_sampler;
 
 #pragma kernel JacobiIterationFloat TYPE=float JacobiIteration=JacobiIterationFloat
 #pragma kernel JacobiIterationFloat2 TYPE=float2 JacobiIteration=JacobiIterationFloat2
@@ -31,13 +33,16 @@ float jac_alpha_inv_beta,jac_inv_beta;
 
 [numthreads(8,8,1)]
 void JacobiIteration(uint3 id : SV_DispatchThreadID){
-    if(!IsInBulk(id))return;
-    TYPE b_c=input_b[id.xy];
-    TYPE x_xm=input_x[id.xy+int2(-1,0)];
-    TYPE x_xp=input_x[id.xy+int2(1,0)];
-    TYPE x_yp=input_x[id.xy+int2(0,1)];
-    TYPE x_ym=input_x[id.xy+int2(0,-1)];
-    output_x[id.xy]=(x_xp+x_xm+x_yp+x_ym)*jac_inv_beta+jac_alpha_inv_beta*b_c;
+    if(IsInBulk(id)){
+        TYPE b_c=input_b[id.xy];
+        TYPE x_xm=input_x[id.xy+int2(-1,0)];
+        TYPE x_xp=input_x[id.xy+int2(1,0)];
+        TYPE x_yp=input_x[id.xy+int2(0,1)];
+        TYPE x_ym=input_x[id.xy+int2(0,-1)];
+        output_x[id.xy]=(x_xp+x_xm+x_yp+x_ym)*jac_inv_beta+jac_alpha_inv_beta*b_c;
+    }
+    else if(IsOnBoundary(id))
+        output_x[id.xy]=input_x[id.xy];
 }
 
 #pragma kernel UpdateNeumannBoundaryFloat TYPE=float UpdateNeumannBoundary=UpdateNeumannBoundaryFloat
@@ -50,7 +55,7 @@ void UpdateNeumannBoundary(uint3 id_:SV_DispatchThreadID){
         output_x[uint2(id,0)]=output_x[uint2(id,1)];
         output_x[uint2(id,gridCount.y-1)]=output_x[uint2(id,gridCount.y-2)];
     }
-    if(0<id && id<gridCount.y){
+    if(0<=id && id<gridCount.y){
         output_x[uint2(0,id)]=output_x[uint2(1,id)];
         output_x[uint2(gridCount.x-1,id)]=output_x[uint2(gridCount.x-2,id)];
     }
@@ -58,48 +63,103 @@ void UpdateNeumannBoundary(uint3 id_:SV_DispatchThreadID){
 
 #pragma kernel AdvectionFloat2 TYPE=float2 Advection=AdvectionFloat2
 // input_x, output_x, input_vector
+
+SamplerState linear_clamp_sampler;
 [numthreads(8,8,1)]
 void Advection(uint3 id : SV_DispatchThreadID){
-    if(!IsInBulk(id))return;
-    float2 uv=GetUV(id);
-    float2 bias=-input_vector[id.xy]*timeStep/(cellSize*gridCount);
-    output_x[id.xy]=input_x.SampleLevel(linear_clamp_sampler,uv+bias,0);
+    if(IsInBulk(id)){
+        float2 uv=GetUV(id);
+        float2 bias=-input_vector[id.xy]*timeStep/(cellSize*gridCount);
+        output_x[id.xy]=input_x.SampleLevel(linear_clamp_sampler,uv+bias,0);
+    }
+    else if(IsOnBoundary(id))
+        output_x[id.xy]=input_x[id.xy];
+}
+
+#pragma kernel Divergence TYPE=float
+// input_vector, output_x
+#pragma kernel Curl TYPE=float
+// input_vector, output_x
+[numthreads(8,8,1)]
+void Divergence(uint3 id: SV_DISPATCHTHREADID){
+    if(IsInBulk(id)){
+        float2 w_xm=input_vector[id.xy+int2(-1,0)];
+        float2 w_xp=input_vector[id.xy+int2(1,0)];
+        float2 w_yp=input_vector[id.xy+int2(0,1)];
+        float2 w_ym=input_vector[id.xy+int2(0,-1)];
+        output_x[id.xy]=(w_xp.x-w_xm.x+w_yp.y-w_ym.y)/(2*cellSize);
+    }
+}
+[numthreads(8,8,1)]
+void Curl(uint3 id:SV_DISPATCHTHREADID){
+    if(IsInBulk(id)){
+        float2 u_xm=input_vector[id.xy+int2(-1,0)];
+        float2 u_xp=input_vector[id.xy+int2(1,0)];
+        float2 u_yp=input_vector[id.xy+int2(0,1)];
+        float2 u_ym=input_vector[id.xy+int2(0,-1)];
+        output_x[id.xy]=(u_xp.y-u_xm.y-u_yp.x+u_ym.x)/(2*cellSize);
+    }
 }
 
 //▽@▽p=▽@w
 //u=w-▽p
-#pragma kernel Divergence TYPE=float
-// input_vector, output_x
 #pragma kernel MinusGradient TYPE=float2
-// input_scalar, input_x, output_x
+// input_scalar, output_x
 
-[numthreads(8,8,1)]
-void Divergence(uint3 id: SV_DISPATCHTHREADID){
-    if(!IsInBulk(id))return;
-    float2 w_xm=input_vector[id.xy+int2(-1,0)];
-    float2 w_xp=input_vector[id.xy+int2(1,0)];
-    float2 w_yp=input_vector[id.xy+int2(0,1)];
-    float2 w_ym=input_vector[id.xy+int2(0,-1)];
-    output_x[id.xy]=(w_xp.x-w_xm.x+w_yp.y-w_ym.y)/(2*cellSize);
-}
 [numthreads(8,8,1)]
 void MinusGradient(uint3 id: SV_DISPATCHTHREADID){
-    if(!IsInBulk(id))return;
-    float p_xm=input_scalar[id.xy+int2(-1,0)];
-    float p_xp=input_scalar[id.xy+int2(1,0)];
-    float p_yp=input_scalar[id.xy+int2(0,1)];
-    float p_ym=input_scalar[id.xy+int2(0,-1)];
-    output_x[id.xy]=input_x[id.xy]-float2(p_xp-p_xm,p_yp-p_ym)/(2*cellSize);
+    if(IsInBulk(id)){
+        float p_xm=input_scalar[id.xy+int2(-1,0)];
+        float p_xp=input_scalar[id.xy+int2(1,0)];
+        float p_yp=input_scalar[id.xy+int2(0,1)];
+        float p_ym=input_scalar[id.xy+int2(0,-1)];
+        float2 grad=float2(p_xp-p_xm,p_yp-p_ym)/(2*cellSize);
+        output_x[id.xy]=output_x[id.xy]-grad;
+    }
+    else if(IsOnBoundary(id))
+        output_x[id.xy]=output_x[id.xy];
 }
 
-#pragma kernel Init TYPE=float2
-// output_x
+//ω=▽×u
+//u=u+eps dt dx normalize(▽|ω|)×ω
+
+#pragma kernel AddVorticity TYPE=float2
+// input_scalar, output_x
+float vorticity_eps;
 [numthreads(8,8,1)]
-void Init(uint3 id: SV_DISPATCHTHREADID){
-    if(IsOnBoundary(id) || IsInBulk(id)){
+void AddVorticity(uint3 id: SV_DISPATCHTHREADID){
+    if(IsInBulk(id)){
+        float w_c=input_scalar[id.xy];
+        float w_xm=input_scalar[id.xy+int2(-1,0)];
+        float w_xp=input_scalar[id.xy+int2(1,0)];
+        float w_yp=input_scalar[id.xy+int2(0,1)];
+        float w_ym=input_scalar[id.xy+int2(0,-1)];
+        float2 grad=float2(w_xp-w_xm,w_yp-w_ym)/(2*cellSize);
+        if(length(grad)>0)
+            output_x[id.xy]=output_x[id.xy]
+                    +vorticity_eps*cellSize*timeStep
+                    *normalize(float2(-grad.y,grad.x))*w_c;
+    }
+    else if(IsOnBoundary(id))
+        output_x[id.xy]=output_x[id.xy];
+}
+
+
+#pragma kernel InitCondition TYPE=float2
+// output_x
+float initial_velocity;
+[numthreads(8,8,1)]
+void InitCondition(uint3 id: SV_DISPATCHTHREADID){
+    if(IsInBulkBoundary(id)){
         float2 uv=GetUV(id);
         float2 uv1=(uv-.5)*2;
         output_x[id.xy]=float2(uv1.y,-uv1.x);
+        //output_x[id.xy]=float2(cos(uv1.y*1.57)+.01*cos(uv1.x*123+uv1.y*234),0);
+        //output_x[id.xy]=float2(0,1);
+
+
+
+        output_x[id.xy]*=initial_velocity;
     }
 }
 

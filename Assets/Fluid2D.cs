@@ -4,20 +4,32 @@ using UnityEngine;
 
 public class Fluid2D : MonoBehaviour
 {
+    [Header("simulation")]
     public Vector2Int gridCount = new Vector2Int(256, 256);
     const int dim = 2;
     public float cellSize = .01f;
     public float timeStep=.01f;
-    public float viscosity = .01f;
-
+    public float viscosity = 0f;
+    public float vorticity_eps = .01f;
     public int pressure_iteration = 40;//40-80
     public int viscosity_iteration = 20;//20-50
+
+    [Header("initial values")]
+    public float initial_velocity = 10f;
+
+    [Header("display")]
+    public float update_interval = .01f;
+    public float color_scale = 20f;
+    public float display_size = 10;
+    public DisplayChannel display_channel;
 
     RenderTexture velocity;
     RenderTexture velocity_new;
     RenderTexture velocity_divergence;
     RenderTexture pressure;
     RenderTexture pressure_new;
+    RenderTexture vorticity;
+    [System.Serializable]public enum DisplayChannel { Velocity,Divergence,Pressure, Vorticity};
 
 
     public ComputeShader shader;
@@ -26,11 +38,24 @@ public class Fluid2D : MonoBehaviour
     {
         Init();
         SetBoundaryCondition();
+        StartCoroutine(MainLoop());
     }
-    private void FixedUpdate()
+    IEnumerator MainLoop()
     {
-        Step();
-        GetComponent<MeshRenderer>().material.SetTexture("_MainTex", velocity);
+        while (true)
+        {
+            Step();
+            transform.localScale = new Vector3(gridCount.x, gridCount.y, 1) / Mathf.Max(gridCount.x, gridCount.y) * display_size;
+            var mat = GetComponent<MeshRenderer>().material;
+            var texs = new Texture[] { velocity, velocity_divergence, pressure, vorticity};
+            mat.SetTexture("_MainTex", texs[((int)display_channel)]);
+            mat.SetFloat("color_scale", color_scale);
+
+            if (update_interval > 0)
+                yield return new WaitForSeconds(update_interval);
+            else
+                yield return null;
+        }
     }
 
     public void Init()
@@ -46,21 +71,21 @@ public class Fluid2D : MonoBehaviour
         velocity_divergence = new RenderTexture(desc);
         pressure = new RenderTexture(desc);
         pressure_new = new RenderTexture(desc);
+        vorticity = new RenderTexture(desc);
     }
     public void SetBoundaryCondition()
     {
         int kid; Vector3Int groupCount;
-        // Advect Diffuse AddForce RemovePressure
+        // Advect Diffuse Vorticity AddForce RemovePressure
         shader.SetInts("gridCount", new int[] { gridCount.x, gridCount.y });
         shader.SetFloat("cellSize", cellSize);
         shader.SetFloat("timeStep", timeStep);
-
         {
-            kid = shader.FindKernel("Init");
+            kid = shader.FindKernel("InitCondition");
+            shader.SetFloat("initial_velocity", initial_velocity);
             shader.SetTexture(kid, "output_x", velocity);
             groupCount = CalcGroupCount(kid);
             shader.Dispatch(kid, groupCount.x, groupCount.y, groupCount.z);
-
         }
 
     }
@@ -82,7 +107,6 @@ public class Fluid2D : MonoBehaviour
             shader.Dispatch(kid, groupCount.x, groupCount.y, groupCount.z);
             Swap(ref velocity_new, ref velocity);
         }
-
         //Diffuse Velocity using Jacobi Method
         if (viscosity > 0)
             for (int i = 0; i < viscosity_iteration; ++i)
@@ -101,6 +125,25 @@ public class Fluid2D : MonoBehaviour
                 Swap(ref velocity_new, ref velocity);
             }
 
+        //Vorticity Constraint
+        //¦Ø=¨Œ¡Áu
+        {
+            kid = shader.FindKernel("Curl");
+            shader.SetTexture(kid, "input_vector", velocity);
+            shader.SetTexture(kid, "output_x", vorticity);
+            groupCount = CalcGroupCount(kid);
+            shader.Dispatch(kid, groupCount.x, groupCount.y, groupCount.z);
+        }
+        //u=u+eps dt dx normalize(¨Œ|¦Ø|)¡Á¦Ø
+        {
+            kid = shader.FindKernel("AddVorticity");
+            shader.SetFloat("vorticity_eps", vorticity_eps);
+            shader.SetTexture(kid, "input_scalar", vorticity);
+            shader.SetTexture(kid, "output_x", velocity);
+            groupCount = CalcGroupCount(kid);
+            shader.Dispatch(kid, groupCount.x, groupCount.y, groupCount.z);
+        }
+
         //Remove Pressure
         //b=¨Œ@w
         {
@@ -111,7 +154,7 @@ public class Fluid2D : MonoBehaviour
             shader.Dispatch(kid, groupCount.x, groupCount.y, groupCount.z);
         }
         //¨Œ@¨Œp=b
-        for(int i=0;i<pressure_iteration;++i)
+        for (int i=0;i<pressure_iteration;++i)
         {
             {
                 kid = shader.FindKernel("JacobiIterationFloat");
@@ -138,11 +181,9 @@ public class Fluid2D : MonoBehaviour
         {
             kid = shader.FindKernel("MinusGradient");
             shader.SetTexture(kid, "input_scalar", pressure);
-            shader.SetTexture(kid, "input_x", velocity);
-            shader.SetTexture(kid, "output_x", velocity_new);
+            shader.SetTexture(kid, "output_x", velocity);
             groupCount = CalcGroupCount(kid);
             shader.Dispatch(kid, groupCount.x, groupCount.y, groupCount.z);
-            Swap(ref velocity_new, ref velocity);
         }
     }
     Vector3Int CalcGroupCount(int kid,bool isBoundary=false)
