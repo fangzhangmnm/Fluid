@@ -76,6 +76,31 @@ void Advection(uint3 id : SV_DispatchThreadID){
         output_x[id.xy]=input_x[id.xy];
 }
 
+#pragma kernel AdvectionRefine TYPE=float2
+// MacCormack method
+// Seems not make a difference
+// input_x=n+1hat output_x=n=>n+1
+[numthreads(8,8,1)]
+void AdvectionRefine(uint3 id : SV_DispatchThreadID){
+    if(IsInBulkBoundary(id)){
+        float2 velocity_ref;
+        if(IsInBulk(id))
+        {
+            float2 uv=GetUV(id);
+            float2 bias=input_x[id.xy]*timeStep/(cellSize*gridCount);//Here we reverse the advection
+            velocity_ref=input_x.SampleLevel(linear_clamp_sampler,uv+bias,0);
+        }else
+            velocity_ref=input_x[id.xy];
+        //here I used a slightly different method to save one copy of cache
+        float2 minVal=min(input_x[id.xy],output_x[id.xy]);
+        float2 maxVal=max(input_x[id.xy],output_x[id.xy]);
+        output_x[id.xy]=input_x[id.xy]+.5*(output_x[id.xy]-velocity_ref);
+        output_x[id.xy]=clamp(output_x[id.xy],minVal,maxVal);
+        //TODO Add Limiter!
+    }
+}
+
+
 #pragma kernel Divergence TYPE=float
 // input_vector, output_x
 #pragma kernel Curl TYPE=float
@@ -153,10 +178,12 @@ void InitCondition(uint3 id: SV_DISPATCHTHREADID){
     if(IsInBulkBoundary(id)){
         float2 uv=GetUV(id);
         float2 uv1=(uv-.5)*2;
-        output_x[id.xy]=float2(uv1.y,-uv1.x);
-        //output_x[id.xy]=float2(cos(uv1.y*1.57)+.01*cos(uv1.x*123+uv1.y*234),0);
-        //output_x[id.xy]=float2(0,1);
+        {
+            output_x[id.xy]=float2(uv1.y,-uv1.x);
+            //output_x[id.xy]=float2(cos(uv1.y*1.6)+.01*cos(uv1.x*12+uv1.y*23),0);
+            //output_x[id.xy]=float2(0,1);
 
+        }
 
 
         output_x[id.xy]*=initial_velocity;

@@ -241,9 +241,10 @@ MonoBehaviour:
   vorticity_eps: 0.01
   pressure_iteration: 40
   viscosity_iteration: 20
+  useMacCormack: 1
   initial_velocity: 10
   update_interval: 0.01
-  color_scale: 20
+  color_scale: 15
   display_size: 10
   display_channel: 0
   shader: {fileID: 7200000, guid: 87db3f627016c03468f4bf913e4d3a13, type: 3}

@@ -13,13 +13,14 @@ public class Fluid2D : MonoBehaviour
     public float vorticity_eps = .01f;
     public int pressure_iteration = 40;//40-80
     public int viscosity_iteration = 20;//20-50
+    public bool useMacCormack = true;
 
     [Header("initial values")]
     public float initial_velocity = 10f;
 
     [Header("display")]
     public float update_interval = .01f;
-    public float color_scale = 20f;
+    public float color_scale = 15f;
     public float display_size = 10;
     public DisplayChannel display_channel;
 
@@ -100,9 +101,18 @@ public class Fluid2D : MonoBehaviour
         //Advect Velocity Field
         {
             kid = shader.FindKernel("AdvectionFloat2");
+            shader.SetTexture(kid, "input_vector", velocity);
             shader.SetTexture(kid, "input_x", velocity);
             shader.SetTexture(kid, "output_x", velocity_new);
-            shader.SetTexture(kid, "input_vector", velocity);
+            groupCount = CalcGroupCount(kid);
+            shader.Dispatch(kid, groupCount.x, groupCount.y, groupCount.z);
+            Swap(ref velocity_new, ref velocity);
+        }
+        if (useMacCormack)
+        {
+            kid = shader.FindKernel("AdvectionRefine");
+            shader.SetTexture(kid, "input_x", velocity);
+            shader.SetTexture(kid, "output_x", velocity_new);
             groupCount = CalcGroupCount(kid);
             shader.Dispatch(kid, groupCount.x, groupCount.y, groupCount.z);
             Swap(ref velocity_new, ref velocity);
