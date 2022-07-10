@@ -1,4 +1,6 @@
 int2 gridCount;
+// Upgrade NOTE: excluded shader from DX11 because it uses wrong array syntax (type[size] name)
+#pragma exclude_renderers d3d11
 float cellSize;
 float timeStep;
 float2 GetUV(uint3 id){
@@ -24,7 +26,6 @@ RWTexture2D<TYPE> output_x;
 Texture2D<float> input_scalar;
 Texture2D<float2> input_vector;
 
-Texture1D<float> input_scalar_1D;
 
 
 #pragma kernel JacobiIterationFloat TYPE=float JacobiIteration=JacobiIterationFloat
@@ -63,8 +64,6 @@ void UpdateNeumannBoundary(uint3 id_:SV_DispatchThreadID){
 }
 
 #pragma kernel AdvectionFloat2 TYPE=float2 Advection=AdvectionFloat2
-#pragma kernel AdvectionFloat3 TYPE=float3 Advection=AdvectionFloat3
-#pragma kernel AdvectionFloat4 TYPE=float4 Advection=AdvectionFloat4
 // input_x, output_x, input_vector
 
 SamplerState linear_clamp_sampler;
@@ -106,6 +105,8 @@ void AdvectionRefine(uint3 id : SV_DispatchThreadID){
 
 #pragma kernel Divergence TYPE=float
 // input_vector, output_x
+#pragma kernel Curl TYPE=float
+// input_vector, output_x
 [numthreads(8,8,1)]
 void Divergence(uint3 id: SV_DISPATCHTHREADID){
     if(IsInBulk(id)){
@@ -116,8 +117,6 @@ void Divergence(uint3 id: SV_DISPATCHTHREADID){
         output_x[id.xy]=(w_xp.x-w_xm.x+w_yp.y-w_ym.y)/(2*cellSize);
     }
 }
-#pragma kernel Curl TYPE=float
-// input_vector, output_x
 [numthreads(8,8,1)]
 void Curl(uint3 id:SV_DISPATCHTHREADID){
     if(IsInBulk(id)){
@@ -126,24 +125,6 @@ void Curl(uint3 id:SV_DISPATCHTHREADID){
         float2 u_yp=input_vector[id.xy+int2(0,1)];
         float2 u_ym=input_vector[id.xy+int2(0,-1)];
         output_x[id.xy]=(u_xp.y-u_xm.y-u_yp.x+u_ym.x)/(2*cellSize);
-    }
-}
-
-#pragma kernel MultiplyScalar1DFloat2 TYPE=float2 MultiplyScalar1D=MultiplyScalar1DFloat2
-// input_x output_x input_scalar_1D
-[numthreads(8,8,1)]
-void MultiplyScalar1D(uint3 id:SV_DISPATCHTHREADID){
-    if(IsInBulkBoundary){
-        output_x[id.xy]=input_x[id.xy]*input_scalar_1D[id.y];
-    }
-}
-
-#pragma kernel AddFloat TYPE=float Add=AddFloat
-// input_x output_x input_b
-float add_coeff1,add_coeff2;
-void Add(uint3 id:SV_DISPATCHTHREADID){
-    if(IsInBulkBoundary){
-        output_x[id.xy]=add_coeff1*input_x[id.xy]+add_coeff2*input_b[id.xy];
     }
 }
 
@@ -190,62 +171,6 @@ void AddVorticity(uint3 id: SV_DISPATCHTHREADID){
         output_x[id.xy]=output_x[id.xy];
 }
 
-RWTexture1D<float> bgMassDensity;
-RWTexture1D<float> bgPressure;
-RWTexture2D<float> potentialTemperature;
-RWTexture2D<float3> MixingRatios;
-float heatCapacityKappa;//0.286
-float referencePressure;//100000
-float waterMolarMass;//28.96e-3
-float airMolarMass;//18.02e-3
-float vaporGamma;//1.33
-float airGamma;//1.4
-
-
-float getPotentialTemperature(float T, float p){
-    return T*pow(referencePressure/p,heatCapacityKappa);
-}
-float getAbsoluteTemperature(float th, float p){
-    return th*pow(p/referencePressure,heatCapacityKappa);
-}
-
-float getSaturationMixingRatio(float TKelvin, float pPascal){
-    float TCelsius=TKelvin-273.15;
-    return 380.16/pPascal*exp(17.67*TCelsius/(TCelsius+243.50));
-}
-
-float getMixedHeatCapacity(float qv){
-    float Xv=qv/(1+qv);
-    float Mth=lerp(airMolarMass,waterMolarMass, Xv);
-    float Yv=Xv*waterMolarMass/airMolarMass;
-    float gammath=lerp(airGamma,vaporGamma,Yv); 
-
-}
-
-void UpdateCondensation(uint3 id: SV_DISPATCHTHREADID){
-    if(IsInBulkBoundary(id)){
-        float3 qvcr=MixingRatios[id.xy];
-        float qv=qvcr.x;
-        float qc=qvcr.y;
-        float qr=qvcr.z;
-        float th=potentialTemperature[id.xy];
-        float pbar=bgPressure[id.y];
-        float T=getAbsoluteTemperature(th,pbar);
-        float qvs=getSaturationMixingRatio(T,pbar);
-        float Er=0;
-        float Ac=0;
-        float Kc=0;
-        float Ec=min(qvs-qv,qc);
-        qv=qv+Ec+Er;
-        qc=qc-Ec-Ac-Kc;
-        qr=qr+Ac+Kc-Er;
-
-    }
-}
-
-
-
-
 
 #pragma kernel InitCondition TYPE=float2
 // output_x
@@ -270,8 +195,3 @@ void InitCondition(uint3 id: SV_DISPATCHTHREADID){
 
 //Fluid is incompressible, since we do not capture sound waves or shockwaves.
 // Create a RenderTexture with enableRandomWrite flag and set it with cs.SetTexture
-
-
-
-
-
